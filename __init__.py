@@ -2,7 +2,7 @@
 
 from aqt import mw
 from aqt.qt import QAction
-from .gui import launch_gui
+from .gui.gui import launch_gui
 
 def on_menu_click():
     launch_gui()
