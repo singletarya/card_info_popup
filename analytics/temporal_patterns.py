@@ -1,7 +1,7 @@
 import datetime 
 from collections import Counter, defaultdict
 
-from base_module import AnalyticsModule
+from .base_module import AnalyticsModule
 
 class TemporalLearningPatterns(AnalyticsModule):
     #Computes temporal patterns in user learning behavior

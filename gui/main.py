@@ -1,22 +1,25 @@
-# anki_stats_gui/main.py
-import sys
-from PyQt6.QtWidgets import QApplication, QMainWindow
+# Simple main window that hosts your existing TemporalTab widget.
+# Replace TemporalTab import with the class you implemented.
 
-# Import your TemporalTab from the package
-from gui.tabs import temporal_tab
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
+from PyQt6.QtCore import Qt
 
-def main():
-    app = QApplication(sys.argv)
+# Use package-qualified import to avoid top-level resolution issues.
+from anki_stats_gui.gui.tabs.temporal_tab import TemporalTab
 
-    # Create a main window and set the TemporalTab as central widget
-    window = QMainWindow()
-    window.setWindowTitle("Temporal Learning Stats (Standalone Test)")
-    tab = temporal_tab()
-    window.setCentralWidget(tab)
-    window.resize(900, 600)
-    window.show()
+class StatsWindow(QMainWindow):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Anki Stats GUI")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
 
-    sys.exit(app.exec())
+        central = QWidget(self)
+        layout = QVBoxLayout(central)
+        self.setCentralWidget(central)
 
-if __name__ == "__main__":
-    main()
+        # Put your tab or main UI here
+        self.temporal_tab = TemporalTab(self)
+        layout.addWidget(self.temporal_tab)
+
+        # Optional: set a reasonable default size
+        self.resize(900, 600)
