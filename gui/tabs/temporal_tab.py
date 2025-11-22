@@ -1,11 +1,9 @@
 # gui/tabs/temporal_tab.py
-# Combined implementation that:
-# - Uses matplotlib if available (optional)
-# - Falls back to a pure-PyQt6 SimpleBarChart when matplotlib is absent
-# - Uses package-qualified imports so Anki can resolve modules inside the add-on
-# - Avoids import-time crashes for optional dependencies
+# Pure-PyQt6 implementation with improved chart aesthetics, "nice" Y-axis ticks,
+# X- and Y-axis titles, and extra layout padding so axis titles don't overlap the plot.
 import time
 import datetime
+import math
 from collections import Counter
 
 from PyQt6.QtWidgets import (
@@ -14,16 +12,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QRectF, QSize, QPointF
 from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QPen
-
-# Try to import matplotlib if available (optional nicer rendering)
-_HAS_MATPLOTLIB = True
-try:
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-except Exception:
-    Figure = None
-    FigureCanvas = None
-    _HAS_MATPLOTLIB = False
 
 # Import analytics engine (package-qualified so Anki finds it)
 try:
@@ -65,8 +53,64 @@ class MiniStat(QFrame):
         self.layout().itemAt(1).widget().setText(value)
 
 
+def _nice_ticks(max_val: float, desired_ticks: int = 5):
+    """Return a list of "nice" tick values from 0..top inclusive.
+    Ensures integer step >= 1 when max_val >= 1 (counts are integer).
+    Steps chosen from 1,2,5 * 10^exp to make tick labels round.
+    """
+    if max_val <= 0:
+        return [0]
+
+    raw_step = float(max_val) / desired_ticks
+    exp = math.floor(math.log10(raw_step)) if raw_step > 0 else 0
+    mag = 10 ** exp
+    residual = raw_step / mag if mag != 0 else raw_step
+
+    if residual <= 1.5:
+        nice = 1
+    elif residual <= 3:
+        nice = 2
+    elif residual <= 7:
+        nice = 5
+    else:
+        nice = 10
+
+    step = nice * mag
+
+    # Since review counts are integers, prefer integer step >= 1
+    if max_val >= 1 and step < 1:
+        step = 1
+
+    # Round step to int if it is effectively integer
+    if abs(round(step) - step) < 1e-9:
+        step = int(round(step))
+
+    top = math.ceil(max_val / step) * step
+    ticks = []
+    v = 0
+    max_iters = 1000
+    it = 0
+    while v <= top + 1e-9 and it < max_iters:
+        if abs(round(v) - v) < 1e-9:
+            ticks.append(int(round(v)))
+        else:
+            ticks.append(v)
+        v += step
+        it += 1
+
+    ticks = sorted(set(ticks))
+    return ticks
+
+
 class SimpleBarChart(QWidget):
-    """A lightweight bar chart drawn with QPainter. Labels and values lists must match."""
+    """A lightweight bar chart drawn with QPainter. Labels and values lists must match.
+    Improvements:
+    - Rounded bars
+    - Subtle grid lines
+    - Left-side numeric Y-axis with "nice" tick labels (no duplicates, rounded multiples)
+    - X- and Y-axis titles
+    - Extra reserved space so axis titles don't overlap the plot
+    """
     def __init__(self, labels=None, values=None, xlabel="", ylabel="", parent=None):
         super().__init__(parent)
         self._labels = labels or []
@@ -74,17 +118,22 @@ class SimpleBarChart(QWidget):
         self.xlabel = xlabel
         self.ylabel = ylabel
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._bar_color = QColor(70, 130, 180)  # steelblue
-        self._grid_color = QColor(200, 200, 200)
-        self._label_color = QColor(30, 30, 30)
+        # Colors and style
+        self._bar_color = QColor(60, 130, 180)  # pleasant steel-blue
+        self._bar_border = QColor(40, 90, 130)
+        self._grid_color = QColor(220, 220, 220)
+        self._label_color = QColor(40, 40, 40)
+        self._bg_color = QColor(250, 250, 250)
         self._margin = 10
+        self._desired_ticks = 5
 
     def sizeHint(self) -> QSize:
-        return QSize(400, 200)
+        # make chart a bit larger by default so titles have room
+        return QSize(560, 300)
 
     def set_data(self, labels, values):
-        self._labels = labels
-        self._values = values
+        self._labels = labels or []
+        self._values = values or []
         self.update()
 
     def paintEvent(self, event):
@@ -93,54 +142,113 @@ class SimpleBarChart(QWidget):
         rect = self.rect().adjusted(self._margin, self._margin, -self._margin, -self._margin)
 
         # background
-        painter.fillRect(rect, QColor(255, 255, 255))
+        painter.fillRect(rect, self._bg_color)
 
-        # determine drawing area
         fm = QFontMetrics(self.font())
         label_height = fm.height() + 6
-        bottom_area = int(label_height * 1.6)
-        top_area = 10
-        plot_rect = QRectF(rect.left(), rect.top() + top_area,
-                           rect.width(), rect.height() - bottom_area - top_area)
 
-        # handle empty data
-        if not self._values:
+        # reserve extra vertical space for X-axis title if present
+        xlabel_space = fm.height() + 6 if getattr(self, "xlabel", None) else 0
+        bottom_area = int(label_height * 1.8 + xlabel_space + 6)
+        top_area = 12
+
+        # reserve extra horizontal space for Y-axis title if present
+        ylabel_space = fm.height() + 10 if getattr(self, "ylabel", None) else 0
+
+        # handle empty or all-zero data
+        if not self._values or max(self._values) == 0:
             painter.setPen(self._label_color)
-            painter.drawText(plot_rect, Qt.AlignmentFlag.AlignCenter, "No data")
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "No data")
             painter.end()
             return
 
-        max_val = max(self._values) or 1
+        max_val = max(self._values)
         n = len(self._values)
+
+        # compute ticks
+        ticks = _nice_ticks(max_val, self._desired_ticks)
+        top_val = ticks[-1] if ticks else max_val
+
+        # reserve left margin for Y labels plus enough space for rotated Y title
+        max_tick_label = str(ticks[-1]) if ticks else str(max_val)
+        y_label_width = fm.horizontalAdvance(max_tick_label) + 12 + ylabel_space
+
+        plot_left = rect.left() + y_label_width
+        plot_right = rect.right()
+        plot_top = rect.top() + top_area
+        plot_bottom = rect.bottom() - bottom_area
+        plot_width = max(4, plot_right - plot_left)
+        plot_height = max(4, plot_bottom - plot_top)
+        plot_rect = QRectF(plot_left, plot_top, plot_width, plot_height)
+
         spacing = max(2, int(plot_rect.width() * 0.02))
         bar_total_width = plot_rect.width() - spacing * (n + 1)
-        bar_width = max(4, int(bar_total_width / n)) if n else 0
+        bar_width = max(6, int(bar_total_width / n)) if n else 0
+        radius = max(1, min(8, bar_width // 3))
 
-        # draw horizontal gridlines (5 lines) using QPointF to avoid float/int overload mismatch
+        # draw horizontal grid lines at tick positions
         painter.setPen(QPen(self._grid_color))
-        for i in range(6):
-            y = plot_rect.top() + (plot_rect.height() * i / 5.0)
+        for t in ticks:
+            if top_val == 0:
+                y = plot_rect.bottom()
+            else:
+                y = plot_rect.bottom() - (t / top_val) * plot_rect.height()
             p1 = QPointF(plot_rect.left(), y)
             p2 = QPointF(plot_rect.right(), y)
             painter.drawLine(p1, p2)
 
-        # draw bars
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._bar_color)
+        # draw Y-axis line
+        painter.setPen(QPen(self._label_color))
+        painter.drawLine(QPointF(plot_rect.left(), plot_rect.top()), QPointF(plot_rect.left(), plot_rect.bottom()))
+
+        # draw Y-axis tick labels
+        painter.setPen(self._label_color)
+        for t in ticks:
+            if top_val == 0:
+                y = plot_rect.bottom()
+            else:
+                y = plot_rect.bottom() - (t / top_val) * plot_rect.height()
+            label_rect = QRectF(rect.left(), y - fm.height() / 2, y_label_width - ylabel_space - 8, fm.height())
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, str(t))
+
+        # draw bars with rounded corners and a small border
         for i, v in enumerate(self._values):
             x = plot_rect.left() + spacing + i * (bar_width + spacing)
-            height = (v / max_val) * plot_rect.height()
+            height = (v / top_val) * plot_rect.height() if top_val else 0
             y = plot_rect.bottom() - height
-            painter.drawRect(QRectF(x, y, bar_width, height))
+            bar_rect = QRectF(x, y, bar_width, height)
+            painter.setPen(QPen(self._bar_border))
+            painter.setBrush(self._bar_color)
+            painter.drawRoundedRect(bar_rect, radius, radius)
 
-        # draw labels under bars
+        # draw labels under bars (elided if needed)
         painter.setPen(self._label_color)
         fm = QFontMetrics(self.font())
         for i, lbl in enumerate(self._labels):
             x = plot_rect.left() + spacing + i * (bar_width + spacing)
-            label_rect = QRectF(x - spacing/2, plot_rect.bottom() + 4, bar_width + spacing, bottom_area - 4)
+            label_rect = QRectF(x - spacing/2, plot_rect.bottom() + 6, bar_width + spacing, bottom_area - 6 - xlabel_space)
             elided = fm.elidedText(str(lbl), Qt.TextElideMode.ElideMiddle, int(label_rect.width()))
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, elided)
+
+        # draw X-axis title (put below the bar labels, in the extra reserved space)
+        if getattr(self, "xlabel", None):
+            painter.setPen(self._label_color)
+            xlabel_rect = QRectF(plot_rect.left(), plot_rect.bottom() + bottom_area - xlabel_space + 2, plot_rect.width(), fm.height())
+            painter.drawText(xlabel_rect, Qt.AlignmentFlag.AlignCenter, self.xlabel)
+
+        # draw Y-axis title (rotated). position further left so it doesn't overlap tick labels.
+        if getattr(self, "ylabel", None):
+            painter.save()
+            painter.setPen(self._label_color)
+            # position: center of the Y-label/title area (left of plot)
+            cx = rect.left() + (y_label_width - ylabel_space) / 2  # center between left edge and tick labels
+            cy = plot_top + plot_height / 2
+            painter.translate(cx, cy)
+            painter.rotate(-90)
+            # draw centered vertically along the rotated axis
+            rotated_rect = QRectF(-plot_height / 2, -fm.height() / 2, plot_height, fm.height())
+            painter.drawText(rotated_rect, Qt.AlignmentFlag.AlignCenter, self.ylabel)
+            painter.restore()
 
         painter.end()
 
@@ -168,32 +276,23 @@ class TemporalTab(QWidget):
         controls_layout.addWidget(self.refresh_btn)
         controls_layout.addStretch()
 
-        # Left: charts stack (hourly, weekday)
+        # Left: charts stack (hourly, weekday) - Qt-only charts
         charts_layout = QVBoxLayout()
 
-        # Use matplotlib if available otherwise SimpleBarChart
-        if _HAS_MATPLOTLIB:
-            self.fig_hour = Figure(figsize=(5, 2.5), tight_layout=True)
-            self.canvas_hour = FigureCanvas(self.fig_hour)
-            self.canvas_hour.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            charts_layout.addWidget(QLabel("<b>Reviews by Hour of Day</b>"))
-            charts_layout.addWidget(self.canvas_hour, 2)
+        charts_layout.addWidget(QLabel("<b>Reviews by Hour of Day</b>"))
+        self.hour_chart = SimpleBarChart(
+            [str(i) for i in range(24)], [0]*24,
+            xlabel="Hour of day", ylabel="Reviews"
+        )
+        charts_layout.addWidget(self.hour_chart, 2)
 
-            self.fig_week = Figure(figsize=(5, 2.0), tight_layout=True)
-            self.canvas_week = FigureCanvas(self.fig_week)
-            self.canvas_week.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            charts_layout.addWidget(QLabel("<b>Reviews by Weekday</b>"))
-            charts_layout.addWidget(self.canvas_week, 1)
-        else:
-            # Pure-Qt fallback charts
-            charts_layout.addWidget(QLabel("<b>Reviews by Hour of Day</b>"))
-            self.hour_chart = SimpleBarChart([str(i) for i in range(24)], [0]*24)
-            charts_layout.addWidget(self.hour_chart, 2)
-
-            charts_layout.addWidget(QLabel("<b>Reviews by Weekday</b>"))
-            weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-            self.week_chart = SimpleBarChart(weekday_labels, [0]*7)
-            charts_layout.addWidget(self.week_chart, 1)
+        charts_layout.addWidget(QLabel("<b>Reviews by Weekday</b>"))
+        weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        self.week_chart = SimpleBarChart(
+            weekday_labels, [0]*7,
+            xlabel="Weekday", ylabel="Reviews"
+        )
+        charts_layout.addWidget(self.week_chart, 1)
 
         # Right: small stats
         stats_layout = QVBoxLayout()
@@ -218,7 +317,7 @@ class TemporalTab(QWidget):
 
         right_widget = QWidget()
         right_widget.setLayout(stats_layout)
-        right_widget.setMaximumWidth(280)
+        right_widget.setMaximumWidth(300)
         body_layout.addWidget(right_widget, 1)
 
         # Main layout
@@ -244,32 +343,6 @@ class TemporalTab(QWidget):
         if since_ms <= 0:
             return revlog_rows
         return [r for r in revlog_rows if r[0] >= since_ms]
-
-    def _plot_hourly_distribution_matplotlib(self, hour_counter: Counter):
-        ax = self.fig_hour.subplots()
-        ax.clear()
-        hours = list(range(24))
-        counts = [hour_counter.get(h, 0) for h in hours]
-        ax.bar(hours, counts, align="center")
-        ax.set_xlabel("Hour of day")
-        ax.set_ylabel("Reviews")
-        ax.set_xticks(hours)
-        ax.set_xlim(-0.5, 23.5)
-        ax.grid(axis="y", linestyle=":", alpha=0.5)
-        self.canvas_hour.draw()
-
-    def _plot_weekday_distribution_matplotlib(self, weekday_counter: Counter):
-        ax = self.fig_week.subplots()
-        ax.clear()
-        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        counts = [weekday_counter.get(i, 0) for i in range(7)]
-        ax.bar(range(7), counts, align="center")
-        ax.set_xticks(range(7))
-        ax.set_xticklabels(weekday_names)
-        ax.set_xlabel("Weekday")
-        ax.set_ylabel("Reviews")
-        ax.grid(axis="y", linestyle=":", alpha=0.5)
-        self.canvas_week.draw()
 
     def _plot_hourly_distribution_qt(self, hour_counter: Counter):
         labels = [str(i) for i in range(24)]
@@ -341,35 +414,26 @@ class TemporalTab(QWidget):
         self.stat_avg_session.set_value(str(avg_session))
         self.stat_session_count.set_value(str(session_count))
 
-        # Draw charts (choose matplotlib if available)
-        if _HAS_MATPLOTLIB and Figure and FigureCanvas:
-            try:
-                self._plot_hourly_distribution_matplotlib(hour_counter)
-                self._plot_weekday_distribution_matplotlib(weekday_counter)
-            except Exception:
-                # If matplotlib fails at runtime, fall back to Qt charts
-                self._plot_hourly_distribution_qt(hour_counter)
-                self._plot_weekday_distribution_qt(weekday_counter)
-        else:
+        # Draw charts (Qt-only)
+        try:
             self._plot_hourly_distribution_qt(hour_counter)
             self._plot_weekday_distribution_qt(weekday_counter)
+        except Exception as e:
+            # if something fails, show empty charts and error in stats
+            self._set_error_state(f"Plot error: {e}")
 
     def _set_error_state(self, message: str):
         # Clear charts and set stats to message
-        if _HAS_MATPLOTLIB and getattr(self, "fig_hour", None):
+        if getattr(self, "hour_chart", None):
             try:
-                self.fig_hour.clear()
-                self.canvas_hour.draw()
-                self.fig_week.clear()
-                self.canvas_week.draw()
+                self.hour_chart.set_data([str(i) for i in range(24)], [0]*24)
             except Exception:
                 pass
-        else:
-            # set charts to empty data
-            if getattr(self, "hour_chart", None):
-                self.hour_chart.set_data([str(i) for i in range(24)], [0]*24)
-            if getattr(self, "week_chart", None):
+        if getattr(self, "week_chart", None):
+            try:
                 self.week_chart.set_data(["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], [0]*7)
+            except Exception:
+                pass
 
         self.stat_most_hour.set_value("-")
         self.stat_most_weekday.set_value("-")
