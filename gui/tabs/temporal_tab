@@ -1,0 +1,243 @@
+# gui/tabs/temporal_tab.py
+import time
+import datetime
+from collections import Counter
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QComboBox, QSizePolicy, QFrame
+)
+from PyQt6.QtCore import Qt
+
+# matplotlib PyQt integration
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+
+# Import your analytics engine module (expects analytics_engine.__init__ to expose the class)
+from analytics import TemporalLearningPatterns
+
+
+def ms_now():
+    return int(time.time() * 1000)
+
+
+def ms_for_days_ago(days: int):
+    return ms_now() - days * 24 * 60 * 60 * 1000
+
+
+class MiniStat(QFrame):
+    """Simple labeled stat used in the right-hand panel."""
+    def __init__(self, title: str, value: str):
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        layout = QVBoxLayout()
+        t = QLabel(f"<b>{title}</b>")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v = QLabel(value)
+        v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.setWordWrap(True)
+        layout.addWidget(t)
+        layout.addWidget(v)
+        self.setLayout(layout)
+
+    def set_value(self, value: str):
+        # second child is the value label
+        self.layout().itemAt(1).widget().setText(value)
+
+
+class TemporalTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # Analytics engine instance (has fetch_revlog and compute helpers)
+        self.engine = TemporalLearningPatterns()
+
+        # Top controls: time range + refresh
+        controls_layout = QHBoxLayout()
+        self.range_select = QComboBox()
+        self.range_select.addItems(["7 days", "30 days", "90 days", "All time"])
+        controls_layout.addWidget(QLabel("Range:"))
+        controls_layout.addWidget(self.range_select)
+
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self.on_refresh)
+        controls_layout.addWidget(self.refresh_btn)
+        controls_layout.addStretch()
+
+        # Left: charts stack (hourly, weekday)
+        charts_layout = QVBoxLayout()
+
+        # Hourly chart
+        self.fig_hour = Figure(figsize=(5, 2.5), tight_layout=True)
+        self.canvas_hour = FigureCanvas(self.fig_hour)
+        self.canvas_hour.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        charts_layout.addWidget(QLabel("<b>Reviews by Hour of Day</b>"))
+        charts_layout.addWidget(self.canvas_hour, 2)
+
+        # Weekday chart
+        self.fig_week = Figure(figsize=(5, 2.0), tight_layout=True)
+        self.canvas_week = FigureCanvas(self.fig_week)
+        self.canvas_week.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        charts_layout.addWidget(QLabel("<b>Reviews by Weekday</b>"))
+        charts_layout.addWidget(self.canvas_week, 1)
+
+        # Right: small stats
+        stats_layout = QVBoxLayout()
+        self.stat_most_hour = MiniStat("Most Active Hour", "-")
+        self.stat_most_weekday = MiniStat("Most Active Weekday", "-")
+        self.stat_total_reviews = MiniStat("Total Reviews", "-")
+        self.stat_avg_session = MiniStat("Avg Session Length (min)", "-")
+        self.stat_session_count = MiniStat("Session Count", "-")
+
+        stats_layout.addWidget(self.stat_most_hour)
+        stats_layout.addWidget(self.stat_most_weekday)
+        stats_layout.addWidget(self.stat_total_reviews)
+        stats_layout.addWidget(self.stat_avg_session)
+        stats_layout.addWidget(self.stat_session_count)
+        stats_layout.addStretch()
+
+        # Combine left/right
+        body_layout = QHBoxLayout()
+        left_widget = QWidget()
+        left_widget.setLayout(charts_layout)
+        body_layout.addWidget(left_widget, 3)
+
+        right_widget = QWidget()
+        right_widget.setLayout(stats_layout)
+        right_widget.setMaximumWidth(280)
+        body_layout.addWidget(right_widget, 1)
+
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(controls_layout)
+        main_layout.addLayout(body_layout)
+        self.setLayout(main_layout)
+
+        # Initial draw
+        self.on_refresh()
+
+    # ---------- Data helpers ----------
+    def _get_time_threshold_ms(self):
+        sel = self.range_select.currentText()
+        if sel == "7 days":
+            return ms_for_days_ago(7)
+        if sel == "30 days":
+            return ms_for_days_ago(30)
+        if sel == "90 days":
+            return ms_for_days_ago(90)
+        return 0  # All time
+
+    def _filter_revlog_by_time(self, revlog_rows, since_ms: int):
+        """revlog_rows: list of rows where first element is id (ms timestamp)."""
+        if since_ms <= 0:
+            return revlog_rows
+        return [r for r in revlog_rows if r[0] >= since_ms]
+
+    # ---------- Plotting ----------
+    def _plot_hourly_distribution(self, hour_counter: Counter):
+        ax = self.fig_hour.subplots()
+        ax.clear()
+
+        # ensure 0..23 ordering
+        hours = list(range(24))
+        counts = [hour_counter.get(h, 0) for h in hours]
+        ax.bar(hours, counts, align="center")
+        ax.set_xlabel("Hour of day")
+        ax.set_ylabel("Reviews")
+        ax.set_xticks(hours)
+        ax.set_xlim(-0.5, 23.5)
+        ax.grid(axis="y", linestyle=":", alpha=0.5)
+        self.canvas_hour.draw()
+
+    def _plot_weekday_distribution(self, weekday_counter: Counter):
+        ax = self.fig_week.subplots()
+        ax.clear()
+
+        # Ordering: Mon(0) ... Sun(6)
+        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        counts = [weekday_counter.get(i, 0) for i in range(7)]
+        ax.bar(range(7), counts, align="center")
+        ax.set_xticks(range(7))
+        ax.set_xticklabels(weekday_names)
+        ax.set_xlabel("Weekday")
+        ax.set_ylabel("Reviews")
+        ax.grid(axis="y", linestyle=":", alpha=0.5)
+        self.canvas_week.draw()
+
+    # ---------- Main refresh ----------
+    def on_refresh(self):
+        """Fetch revlog, filter by time range, compute distributions, and redraw."""
+        # fetch raw revlog (list of tuples)
+        try:
+            revlog = self.engine.fetch_revlog()
+        except Exception as e:
+            # engine might raise if not run in Anki context
+            self._set_error_state(f"Unable to load revlog: {e}")
+            return
+
+        # filter by selected range
+        since_ms = self._get_time_threshold_ms()
+        revlog = self._filter_revlog_by_time(revlog, since_ms)
+
+        if not revlog:
+            self._set_error_state("No reviews in selected range.")
+            return
+
+        # Compute distributions (we do the same logic as the analytics module)
+        hours = []
+        weekdays = []
+        for row in revlog:
+            # row[0] is id (ms timestamp)
+            ts_ms = row[0]
+            dt = datetime.datetime.fromtimestamp(ts_ms / 1000)
+            hours.append(dt.hour)
+            weekdays.append(dt.weekday())
+
+        hour_counter = Counter(hours)
+        weekday_counter = Counter(weekdays)
+
+        # Session lengths: group by gaps > 15 minutes (same logic as analytics module)
+        timestamps = sorted([r[0] for r in revlog])
+        session_lengths = []
+        session_start = timestamps[0]
+        previous = timestamps[0]
+        for t in timestamps[1:]:
+            gap_minutes = (t - previous) / 1000 / 60
+            if gap_minutes > 15:
+                session_lengths.append((previous - session_start) / 1000 / 60)
+                session_start = t
+            previous = t
+        session_lengths.append((previous - session_start) / 1000 / 60)
+
+        # derive top-level stats
+        most_active_hour = hour_counter.most_common(1)[0][0]
+        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        most_active_day_index = weekday_counter.most_common(1)[0][0]
+        most_active_weekday = weekday_names[most_active_day_index]
+        total_reviews = len(revlog)
+        avg_session = round(sum(session_lengths) / len(session_lengths), 2) if session_lengths else 0
+        session_count = len(session_lengths)
+
+        # Update stats UI
+        self.stat_most_hour.set_value(f"{most_active_hour}:00")
+        self.stat_most_weekday.set_value(most_active_weekday)
+        self.stat_total_reviews.set_value(str(total_reviews))
+        self.stat_avg_session.set_value(str(avg_session))
+        self.stat_session_count.set_value(str(session_count))
+
+        # Draw charts
+        self._plot_hourly_distribution(hour_counter)
+        self._plot_weekday_distribution(weekday_counter)
+
+    def _set_error_state(self, message: str):
+        # Clear charts and set stats to message
+        self.fig_hour.clear()
+        self.canvas_hour.draw()
+        self.fig_week.clear()
+        self.canvas_week.draw()
+
+        self.stat_most_hour.set_value("-")
+        self.stat_most_weekday.set_value("-")
+        self.stat_total_reviews.set_value(message)
+        self.stat_avg_session.set_value("-")
+        self.stat_session_count.set_value("-")
