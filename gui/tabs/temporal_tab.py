@@ -1,40 +1,47 @@
+# File location
 # gui/tabs/temporal_tab.py
-# Pure-PyQt6 implementation with improved chart aesthetics, "nice" Y-axis ticks,
-# X- and Y-axis titles, and extra layout padding so axis titles don't overlap the plot.
+
+#Import necessary libraries and modules
 import time
 import datetime
 import math
 from collections import Counter
-
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QSizePolicy, QFrame
 )
 from PyQt6.QtCore import Qt, QRectF, QSize, QPointF
-from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QPen
-
-# Import analytics engine (package-qualified so Anki finds it)
+from PyQt6.QtGui import QPainter, QColor, QFontMetrics, QPen, QFont
 try:
-    # analytics.__init__ should expose TemporalLearningPatterns
     from anki_stats_gui.analytics import TemporalLearningPatterns
 except Exception:
-    # As a fallback, try direct module import (in case __init__.py isn't exporting)
     try:
         from anki_stats_gui.analytics.temporal_patterns import TemporalLearningPatterns
     except Exception:
         TemporalLearningPatterns = None  # will be checked at runtime
+from aqt import mw
 
-
+#Retrieve and format data from analytics module
 def ms_now():
     return int(time.time() * 1000)
-
 
 def ms_for_days_ago(days: int):
     return ms_now() - days * 24 * 60 * 60 * 1000
 
+def _format_hour_label(h: int) -> str:
+    """Return hour label in 12-hour short form like '7 p' or '8 a'.
+    0 -> '12 a', 12 -> '12 p', 13 -> '1 p', etc.
+    """
+    h = int(h) % 24
+    suffix = 'a' if h < 12 else 'p'
+    hour12 = h % 12
+    if hour12 == 0:
+        hour12 = 12
+    return f"{hour12} {suffix}"
 
+#
 class MiniStat(QFrame):
-    """Simple labeled stat used in the right-hand panel."""
+    #Simple labeled stat used in panel.
     def __init__(self, title: str, value: str):
         super().__init__()
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -128,8 +135,8 @@ class SimpleBarChart(QWidget):
         self._desired_ticks = 5
 
     def sizeHint(self) -> QSize:
-        # make chart a bit larger by default so titles have room
-        return QSize(560, 300)
+        # make chart wider than tall by default so titles have room
+        return QSize(720, 320)
 
     def set_data(self, labels, values):
         self._labels = labels or []
@@ -144,16 +151,31 @@ class SimpleBarChart(QWidget):
         # background
         painter.fillRect(rect, self._bg_color)
 
-        fm = QFontMetrics(self.font())
+        # use a slightly smaller font for tick/axis numbers to avoid overlap
+        base_font = self.font()
+        label_font = QFont(base_font)
+        # reduce point size a couple of points where possible
+        try:
+            ps = base_font.pointSize()
+        except Exception:
+            ps = -1
+        if ps <= 0:
+            ps_new = 9
+        else:
+            ps_new = max(7, ps - 2)
+        label_font.setPointSize(ps_new)
+        fm = QFontMetrics(label_font)
         label_height = fm.height() + 6
 
         # reserve extra vertical space for X-axis title if present
-        xlabel_space = fm.height() + 6 if getattr(self, "xlabel", None) else 0
-        bottom_area = int(label_height * 1.8 + xlabel_space + 6)
+        # add a bit more padding so long tick labels or titles don't collide
+        xlabel_space = fm.height() + 8 if getattr(self, "xlabel", None) else 0
+        bottom_area = int(label_height * 2.2 + xlabel_space + 8)
         top_area = 12
 
         # reserve extra horizontal space for Y-axis title if present
-        ylabel_space = fm.height() + 10 if getattr(self, "ylabel", None) else 0
+        # increase padding to keep rotated title clear of tick labels
+        ylabel_space = fm.height() + 18 if getattr(self, "ylabel", None) else 0
 
         # handle empty or all-zero data
         if not self._values or max(self._values) == 0:
@@ -170,8 +192,14 @@ class SimpleBarChart(QWidget):
         top_val = ticks[-1] if ticks else max_val
 
         # reserve left margin for Y labels plus enough space for rotated Y title
-        max_tick_label = str(ticks[-1]) if ticks else str(max_val)
-        y_label_width = fm.horizontalAdvance(max_tick_label) + 12 + ylabel_space
+        # compute maximum tick label width from all ticks so labels never overlap
+        try:
+            max_tick_label = max((str(t) for t in ticks), key=lambda s: fm.horizontalAdvance(s)) if ticks else str(max_val)
+            max_tick_w = fm.horizontalAdvance(max_tick_label)
+        except Exception:
+            max_tick_w = fm.horizontalAdvance(str(ticks[-1])) if ticks else fm.horizontalAdvance(str(max_val))
+        # leave additional padding so the rotated Y title doesn't overlap tick labels
+        y_label_width = max_tick_w + 20 + ylabel_space
 
         plot_left = rect.left() + y_label_width
         plot_right = rect.right()
@@ -201,14 +229,16 @@ class SimpleBarChart(QWidget):
         painter.setPen(QPen(self._label_color))
         painter.drawLine(QPointF(plot_rect.left(), plot_rect.top()), QPointF(plot_rect.left(), plot_rect.bottom()))
 
-        # draw Y-axis tick labels
+        # draw Y-axis tick labels (use the smaller label font)
+        painter.setFont(label_font)
         painter.setPen(self._label_color)
         for t in ticks:
             if top_val == 0:
                 y = plot_rect.bottom()
             else:
                 y = plot_rect.bottom() - (t / top_val) * plot_rect.height()
-            label_rect = QRectF(rect.left(), y - fm.height() / 2, y_label_width - ylabel_space - 8, fm.height())
+            # limit width to available left margin minus some safety padding
+            label_rect = QRectF(rect.left(), y - fm.height() / 2, max(12, y_label_width - 14), fm.height())
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, str(t))
 
         # draw bars with rounded corners and a small border
@@ -223,7 +253,8 @@ class SimpleBarChart(QWidget):
 
         # draw labels under bars (elided if needed)
         painter.setPen(self._label_color)
-        fm = QFontMetrics(self.font())
+        # keep using the smaller label font/metrics for tick labels under bars
+        fm = QFontMetrics(label_font)
         for i, lbl in enumerate(self._labels):
             x = plot_rect.left() + spacing + i * (bar_width + spacing)
             label_rect = QRectF(x - spacing/2, plot_rect.bottom() + 6, bar_width + spacing, bottom_area - 6 - xlabel_space)
@@ -232,6 +263,14 @@ class SimpleBarChart(QWidget):
 
         # draw X-axis title (put below the bar labels, in the extra reserved space)
         if getattr(self, "xlabel", None):
+            # use a slightly larger/bold font for axis titles
+            title_font = QFont(base_font)
+            try:
+                title_font.setPointSize(max(9, ps_new + 1))
+            except Exception:
+                pass
+            title_font.setBold(True)
+            painter.setFont(title_font)
             painter.setPen(self._label_color)
             xlabel_rect = QRectF(plot_rect.left(), plot_rect.bottom() + bottom_area - xlabel_space + 2, plot_rect.width(), fm.height())
             painter.drawText(xlabel_rect, Qt.AlignmentFlag.AlignCenter, self.xlabel)
@@ -240,11 +279,20 @@ class SimpleBarChart(QWidget):
         if getattr(self, "ylabel", None):
             painter.save()
             painter.setPen(self._label_color)
-            # position: center of the Y-label/title area (left of plot)
-            cx = rect.left() + (y_label_width - ylabel_space) / 2  # center between left edge and tick labels
+            # move Y title further left away from the plot by applying an extra shift
+            y_title_shift = 12 + (ylabel_space // 4)
+            cx = rect.left() + (y_label_width) / 2 - y_title_shift
             cy = plot_top + plot_height / 2
             painter.translate(cx, cy)
             painter.rotate(-90)
+            # use title font for the Y label as well
+            title_font = QFont(base_font)
+            try:
+                title_font.setPointSize(max(9, ps_new + 1))
+            except Exception:
+                pass
+            title_font.setBold(True)
+            painter.setFont(title_font)
             # draw centered vertically along the rotated axis
             rotated_rect = QRectF(-plot_height / 2, -fm.height() / 2, plot_height, fm.height())
             painter.drawText(rotated_rect, Qt.AlignmentFlag.AlignCenter, self.ylabel)
@@ -271,59 +319,101 @@ class TemporalTab(QWidget):
         controls_layout.addWidget(QLabel("Range:"))
         controls_layout.addWidget(self.range_select)
 
+        # Deck selector: allow user to choose a specific deck (default: All decks)
+        self.deck_select = QComboBox()
+        # top entry means "include data from any deck"; store None as itemData
+        self.deck_select.addItem("Any deck (all data)", None)
+        try:
+            decks = mw.col.decks.decks()
+            # decks() returns a mapping of id -> info dict with 'name'
+            items = [(did, info.get("name") if isinstance(info, dict) else str(info)) for did, info in decks.items()]
+            # sort by name for predictable ordering and store numeric id as itemData
+            for did, name in sorted(items, key=lambda x: x[1].lower() if x[1] else ""):
+                self.deck_select.addItem(name, did)
+        except Exception:
+            # best-effort fallback: try to fetch by name list and resolve ids
+            try:
+                names = mw.col.decks.all_names()
+                for name in names:
+                    try:
+                        did = mw.col.decks.id(name)
+                        self.deck_select.addItem(name, did)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        controls_layout.addWidget(QLabel("Deck:"))
+        controls_layout.addWidget(self.deck_select)
+        # Refresh charts automatically when the selected deck changes
+        try:
+            self.deck_select.currentIndexChanged.connect(self.on_refresh)
+        except Exception:
+            # if connecting fails for any reason, ignore; user can still hit Refresh
+            pass
+
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.on_refresh)
         controls_layout.addWidget(self.refresh_btn)
         controls_layout.addStretch()
 
-        # Left: charts stack (hourly, weekday) - Qt-only charts
-        charts_layout = QVBoxLayout()
+        # Left: charts area — arrange two charts side-by-side (each with title above)
+        charts_layout = QHBoxLayout()
 
-        charts_layout.addWidget(QLabel("<b>Reviews by Hour of Day</b>"))
+        # Hour chart container (title + chart)
+        hour_container = QWidget()
+        hour_v = QVBoxLayout()
+        title = QLabel("<b>Reviews by Hour of Day</b>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hour_v.addWidget(title)
         self.hour_chart = SimpleBarChart(
             [str(i) for i in range(24)], [0]*24,
             xlabel="Hour of day", ylabel="Reviews"
         )
-        charts_layout.addWidget(self.hour_chart, 2)
+        hour_v.addWidget(self.hour_chart)
+        hour_container.setLayout(hour_v)
 
-        charts_layout.addWidget(QLabel("<b>Reviews by Weekday</b>"))
+        # Weekday chart container (title + chart)
+        week_container = QWidget()
+        week_v = QVBoxLayout()
+        title = QLabel("<b>Reviews by Weekday</b>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        week_v.addWidget(title)
         weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         self.week_chart = SimpleBarChart(
             weekday_labels, [0]*7,
             xlabel="Weekday", ylabel="Reviews"
         )
-        charts_layout.addWidget(self.week_chart, 1)
+        week_v.addWidget(self.week_chart)
+        week_container.setLayout(week_v)
 
-        # Right: small stats
-        stats_layout = QVBoxLayout()
+        charts_layout.addWidget(hour_container, 1)
+        charts_layout.addWidget(week_container, 1)
+
+        # Top: small stats laid out horizontally (panel across the top)
+        stats_h = QHBoxLayout()
         self.stat_most_hour = MiniStat("Most Active Hour", "-")
         self.stat_most_weekday = MiniStat("Most Active Weekday", "-")
         self.stat_total_reviews = MiniStat("Total Reviews", "-")
         self.stat_avg_session = MiniStat("Avg Session Length (min)", "-")
         self.stat_session_count = MiniStat("Session Count", "-")
 
-        stats_layout.addWidget(self.stat_most_hour)
-        stats_layout.addWidget(self.stat_most_weekday)
-        stats_layout.addWidget(self.stat_total_reviews)
-        stats_layout.addWidget(self.stat_avg_session)
-        stats_layout.addWidget(self.stat_session_count)
-        stats_layout.addStretch()
+        # Make stats display side-by-side and expand horizontally
+        for w in (self.stat_most_hour, self.stat_most_weekday, self.stat_total_reviews, self.stat_avg_session, self.stat_session_count):
+            w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            stats_h.addWidget(w)
 
-        # Combine left/right
-        body_layout = QHBoxLayout()
-        left_widget = QWidget()
-        left_widget.setLayout(charts_layout)
-        body_layout.addWidget(left_widget, 3)
+        stats_widget = QWidget()
+        stats_widget.setLayout(stats_h)
 
-        right_widget = QWidget()
-        right_widget.setLayout(stats_layout)
-        right_widget.setMaximumWidth(300)
-        body_layout.addWidget(right_widget, 1)
+        # Charts widget: place both charts side-by-side across available width
+        charts_widget = QWidget()
+        charts_widget.setLayout(charts_layout)
 
-        # Main layout
+        # Main layout: controls, top stats panel, then charts across full width
         main_layout = QVBoxLayout()
         main_layout.addLayout(controls_layout)
-        main_layout.addLayout(body_layout)
+        main_layout.addWidget(stats_widget)
+        main_layout.addWidget(charts_widget, 1)
         self.setLayout(main_layout)
 
         # Initial draw
@@ -361,7 +451,24 @@ class TemporalTab(QWidget):
             return
 
         try:
-            revlog = self.engine.fetch_revlog()
+            # get deck selection: we store None for "Any deck" or numeric did for real decks
+            deck_id = None
+            if getattr(self, 'deck_select', None):
+                try:
+                    deck_id = self.deck_select.currentData()
+                except Exception:
+                    deck_id = None
+            revlog = self.engine.fetch_revlog(deck_id)
+            # DEBUG: show how many rows were fetched and which deck id was used
+            try:
+                print(f"[temporal_tab] fetch_revlog returned {len(revlog)} rows for deck_id={deck_id}")
+            except Exception:
+                print("[temporal_tab] fetch_revlog returned (unable to determine length)")
+            try:
+                # temporarily show fetch count in the Total Reviews stat to help debugging
+                self.stat_total_reviews.set_value(f"Fetched: {len(revlog)} (deck={deck_id})")
+            except Exception:
+                pass
         except Exception as e:
             self._set_error_state(f"Unable to load revlog: {e}")
             return

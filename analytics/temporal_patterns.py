@@ -2,6 +2,7 @@ import datetime
 from collections import Counter, defaultdict
 
 from .base_module import AnalyticsModule
+from aqt import mw
 
 class TemporalLearningPatterns(AnalyticsModule):
     #Computes temporal patterns in user learning behavior
@@ -42,6 +43,60 @@ class TemporalLearningPatterns(AnalyticsModule):
         session_lengths.append((previous-session_start)/1000/60)
         
         return session_lengths
+
+    def fetch_revlog(self, deck_id=None):
+        """Return revlog rows with the timestamp as the first column.
+        If `deck_id` is provided, only return revlog rows for cards in that deck.
+        Each row is returned in the form (time, cid, id, ease, ivl, lastIvl, type)
+        where `time` is the millisecond timestamp stored in revlog.
+        """
+        # Some Anki versions/storage may have `revlog.time` in seconds (10-digit)
+        # or milliseconds (13-digit). To be robust, fetch the raw `time` value
+        # and convert to milliseconds in Python based on magnitude.
+        if deck_id is None:
+            query = """
+                SELECT time, cid, id, ease, ivl, lastIvl, type
+                FROM revlog
+            """
+            rows = mw.col.db.all(query)
+        else:
+            query = """
+                SELECT revlog.time AS time, revlog.cid, revlog.id, revlog.ease, revlog.ivl, revlog.lastIvl, revlog.type
+                FROM revlog
+                JOIN cards ON revlog.cid = cards.id
+                WHERE cards.did = :did
+            """
+            rows = mw.col.db.all(query, did=deck_id)
+
+        if not rows:
+            return rows
+
+        # Determine whether `time` appears to be seconds or milliseconds by
+        # inspecting the largest value. Current epoch in seconds is ~1e9,
+        # in milliseconds ~1e12. Use threshold to distinguish.
+        try:
+            max_raw = max(r[0] for r in rows if r[0] is not None)
+        except Exception:
+            max_raw = 0
+
+        # If max_raw looks like milliseconds already (>= 1e11), keep as-is.
+        # Otherwise assume seconds and multiply by 1000.
+        needs_mul = False
+        if max_raw and max_raw < 1e11:
+            needs_mul = True
+
+        if needs_mul:
+            converted = [((r[0] * 1000) if r[0] is not None else None,) + tuple(r[1:]) for r in rows]
+        else:
+            converted = [(r[0],) + tuple(r[1:]) for r in rows]
+
+        # Debug: print detection info to help user diagnose unit issues.
+        try:
+            print(f"[temporal_patterns] fetch_revlog deck_id={deck_id} rows={len(rows)} max_raw={max_raw} needs_mul={needs_mul}")
+        except Exception:
+            pass
+
+        return converted
     
     def compute(self):
         #Returns dictionary of insights ready for display
