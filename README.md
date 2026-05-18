@@ -1,4 +1,4 @@
-# Card Stats Popup (Anki Add-on)
+# Anki Card Information Popup (Anki Add-on)
 
 This add-on shows a popup for the current card as soon as you grade it, with:
 
