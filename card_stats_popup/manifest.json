@@ -1,0 +1,8 @@
+{
+  "name": "Card Stats Popup",
+  "mod": 0,
+  "author": "audrey",
+  "description": "Shows per-card stats in a small overlay after each answer.",
+  "version": "1.0.0",
+  "min_point_version": 61
+}
