@@ -20,7 +20,7 @@ This add-on shows a popup for the current card as soon as you grade it, with:
 
 ## Install in Anki
 
-### Option 1: Install from AnkiWeb (add-on code)
+### Option 1: Install from AnkiWeb (add-on code) - https://ankiweb.net/shared/info/1868415661?cb=1779304747671
 
 1. Open Anki.
 2. Go to **Tools -> Add-ons -> Get Add-ons...**.
