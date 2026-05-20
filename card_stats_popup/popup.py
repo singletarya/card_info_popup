@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -7,14 +7,16 @@ from aqt.reviewer import Reviewer
 from .models import CardStats, PopupSettings
 
 
-def _ease_emoji(ease_factor_percent: float) -> str:
+def _ease_emoji(ease_factor_percent: float, correct_pct: int) -> str:
+    if correct_pct == 100:
+        return "\U0001F680"
     if ease_factor_percent >= 260:
-        return "🚀"
+        return "\U0001F680"
     if ease_factor_percent >= 230:
-        return "🙂"
+        return "\U0001F642"
     if ease_factor_percent >= 180:
-        return "😐"
-    return "😵"
+        return "\U0001F610"
+    return "\U0001F610"
 
 
 def show_popup(reviewer: Reviewer, stats: CardStats, settings: PopupSettings) -> None:
@@ -24,7 +26,7 @@ def show_popup(reviewer: Reviewer, stats: CardStats, settings: PopupSettings) ->
     correct_angle = round((stats.correct / total) * 360)
     if stats.correct > 0 and stats.incorrect > 0:
         correct_angle = min(max(correct_angle, 1), 359)
-    ease_emoji = _ease_emoji(stats.ease_factor_percent)
+    ease_emoji = _ease_emoji(stats.ease_factor_percent, correct_pct)
 
     bg = json.dumps(settings.background_color)
     text = json.dumps(settings.text_color)
@@ -435,3 +437,4 @@ def show_popup(reviewer: Reviewer, stats: CardStats, settings: PopupSettings) ->
 """
 
     reviewer.web.eval(js)
+

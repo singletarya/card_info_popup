@@ -12,7 +12,6 @@ This add-on shows a popup for the current card as soon as you grade it, with:
 
 - `card_stats_popup/manifest.json`
 - `card_stats_popup/__init__.py`
-- `card_stats_popup/config.json`
 - `card_stats_popup/models.py`
 - `card_stats_popup/settings.py`
 - `card_stats_popup/stats.py`
@@ -39,15 +38,10 @@ This add-on shows a popup for the current card as soon as you grade it, with:
 
 ## Customization
 
-Use **Tools -> Add-ons -> Card Stats Popup -> Config** and edit:
+There is no add-on config dialog for this project.
 
-- `popup_background_color` (CSS color)
-- `popup_text_color` (CSS color)
-- `chart_correct_color` (CSS color)
-- `chart_incorrect_color` (CSS color)
-- `popup_duration_ms` (milliseconds)
-- `answer_delay_ms` (milliseconds, clamped to 5000-10000)
-- `enable_live_color_picker` (true/false)
+- Change default values in `card_stats_popup/settings.py`.
+- Change popup colors at runtime with the built-in live color picker in the popup.
 
 ## Notes
 

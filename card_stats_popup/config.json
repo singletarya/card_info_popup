@@ -1,9 +1,0 @@
-{
-  "popup_background_color": "rgba(20, 24, 28, 0.95)",
-  "popup_text_color": "#f3f4f6",
-  "chart_correct_color": "#2ecc71",
-  "chart_incorrect_color": "#e74c3c",
-  "popup_duration_ms": 8500,
-  "answer_delay_ms": 7000,
-  "enable_live_color_picker": true
-}

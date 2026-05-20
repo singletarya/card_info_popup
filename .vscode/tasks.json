@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Sync Addon to Anki",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/sync_to_anki.ps1"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}
