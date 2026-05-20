@@ -20,6 +20,16 @@ This add-on shows a popup for the current card as soon as you grade it, with:
 
 ## Install in Anki
 
+### Option 1: Install from AnkiWeb (add-on code)
+
+1. Open Anki.
+2. Go to **Tools -> Add-ons -> Get Add-ons...**.
+3. Enter this code: **1868415661**.
+4. Click **OK** and let Anki download the add-on.
+5. Restart Anki.
+
+### Option 2: Manual install from source
+
 1. Open Anki.
 2. Go to **Tools -> Add-ons -> View Files**.
 3. Create a new folder (for example, `card_stats_popup`).
